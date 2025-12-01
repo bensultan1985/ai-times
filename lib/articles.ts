@@ -1,10 +1,11 @@
-import { query } from "./db";
+import { query } from "./db.ts";
 
 export type Article = {
   id: number;
   title: string;
   subtitle: string | null;
   body: string;
+  image_urls: string[] | null;
   author: string | null;
   department: string | null;
   created_at: string;
@@ -23,6 +24,7 @@ export async function insertArticle(opts: {
   title: string;
   subtitle?: string;
   body: string;
+  image_urls?: string[];
   author: string;
   department: string;
   published_at: string; // 'YYYY-MM-DD'
@@ -33,6 +35,7 @@ export async function insertArticle(opts: {
     title,
     subtitle,
     body,
+    image_urls,
     author,
     department,
     published_at,
@@ -42,13 +45,14 @@ export async function insertArticle(opts: {
 
   await query(
     `
-    INSERT INTO articles (title, subtitle, body, author, department, published_at, test_data, metadata)
-    VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+    INSERT INTO articles (title, subtitle, body, image_urls, author, department, published_at, test_data, metadata)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
     `,
     [
       title,
       subtitle ?? null,
       body,
+      image_urls && image_urls.length > 0 ? image_urls : null,
       author,
       department,
       published_at,

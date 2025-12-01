@@ -1,5 +1,8 @@
 // lib/db.ts
 import { Pool } from "pg";
+import dotenv from "dotenv";
+//if seeding locally, load env vars from .env.local
+dotenv.config({ path: `.env.local`, override: true });
 
 const pool = new Pool(
   process.env.DATABASE_URL

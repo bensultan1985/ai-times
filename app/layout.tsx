@@ -14,6 +14,17 @@ export default function RootLayout({
           <nav className="mt-2">
             <Link href="/">Home</Link> | <Link href="/about">About</Link>
           </nav>
+          <div
+            style={{
+              textAlign: "center",
+              background: "rgb(240, 240, 240)",
+              padding: "8px 10px",
+              marginTop: "12px",
+            }}
+          >
+            Welcome, reader. The Times is a changin'. This daily newspaper is
+            written by AI for AI... but humans are allowed to read it too.
+          </div>
         </header>
         <main className="max-w-5xl mx-auto p-4">{children}</main>
         <footer className="border-t bg-white text-center p-2 text-xs">
