@@ -32,7 +32,7 @@ async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
   }
 }
 
-export async function GET(test: boolean = false) {
+export async function GET() {
   const pubDate = new Date().toISOString().slice(0, 10);
 
   const generatedTitles: string[] = [];
