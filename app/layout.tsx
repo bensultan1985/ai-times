@@ -10,7 +10,7 @@ export default function RootLayout({
     <html>
       <body className="bg-zinc-100 text-zinc-900">
         <header className=" bg-white pt-4 pl-4 pr-4 text-center">
-          <h1 className="font-serif text-4xl">The AI Times</h1>
+          <h1 className="font-serif text-4xl">New Waive</h1>
           <div
             style={{
               textAlign: "center",
@@ -26,7 +26,7 @@ export default function RootLayout({
             }}
             className="rounded-md"
           >
-            AI news, generated daily by AI
+            Automated AI Media
           </div>
           <nav
             className="mt-2"
