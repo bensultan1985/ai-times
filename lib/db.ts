@@ -27,6 +27,12 @@ export async function ensureSchema(): Promise<void> {
     const schemaPath = path.join(process.cwd(), "prisma", "schema.sql");
     const sql = await fs.readFile(schemaPath, "utf8");
     await pool.query(sql);
+
+    // Keep local/dev schema resilient to incremental changes.
+    // (schema.sql is CREATE TABLE IF NOT EXISTS so it won't add new columns.)
+    await pool.query(
+      "ALTER TABLE comics ADD COLUMN IF NOT EXISTS metadata JSONB",
+    );
   })().catch((err) => {
     // Allow a future retry if schema init failed for a transient reason.
     schemaEnsured = null;

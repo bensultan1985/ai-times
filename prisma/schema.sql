@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS comics (
     image_url TEXT NOT NULL,
     published_at DATE NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    test_data BOOLEAN DEFAULT FALSE
+    test_data BOOLEAN DEFAULT FALSE,
+    metadata JSONB
 );
 CREATE INDEX IF NOT EXISTS idx_comics_published_at ON comics (published_at);

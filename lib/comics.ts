@@ -9,6 +9,7 @@ export type Comic = {
   published_at: string;
   created_at: string;
   test_data?: boolean;
+  metadata?: unknown;
 };
 
 export async function getComicsForToday(): Promise<Comic[]> {
@@ -24,9 +25,49 @@ export async function insertComic(opts: {
   image_url: string;
   published_at: string;
   test_data?: boolean;
+  metadata?: unknown;
 }) {
-  const { comic_type, title, caption, image_url, published_at, test_data } =
-    opts;
+  const {
+    comic_type,
+    title,
+    caption,
+    image_url,
+    published_at,
+    test_data,
+    metadata,
+  } = opts;
+
+  if (metadata != null && process.env.NODE_ENV !== "production") {
+    try {
+      await query("ALTER TABLE comics ADD COLUMN IF NOT EXISTS metadata JSONB");
+    } catch {
+      // Best-effort in dev/local; fall back to legacy insert if it fails.
+    }
+  }
+
+  // Prefer writing metadata if the column exists.
+  // If the DB hasn't been migrated yet, fall back to the older insert.
+  try {
+    await query(
+      `
+      INSERT INTO comics (comic_type, title, caption, image_url, published_at, test_data, metadata)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `,
+      [
+        comic_type,
+        title ?? null,
+        caption ?? null,
+        image_url,
+        published_at,
+        test_data ?? false,
+        metadata ?? null,
+      ],
+    );
+    return;
+  } catch (err: any) {
+    // 42703 = undefined_column
+    if (err?.code !== "42703") throw err;
+  }
 
   await query(
     `
@@ -51,6 +92,7 @@ export async function upsertComic(opts: {
   image_url: string;
   published_at: string;
   test_data?: boolean;
+  metadata?: unknown;
 }) {
   const { comic_type, published_at } = opts;
 
