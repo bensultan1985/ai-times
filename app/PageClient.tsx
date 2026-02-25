@@ -2,14 +2,16 @@
 
 import { useEffect, useState } from "react";
 import type { Article } from "@/lib/articles";
+import type { Comic } from "@/lib/comics";
 
 import { parseBodyAndCitations } from "./parseBodyAndCitations";
 
 type Props = {
   articles: Article[];
+  comics: Comic[];
 };
 
-export function PageClient({ articles }: Props) {
+export function PageClient({ articles, comics }: Props) {
   const [highlightId, setHighlightId] = useState<number | null>(null);
 
   const handleNavClick = (id: number) => {
@@ -27,7 +29,8 @@ export function PageClient({ articles }: Props) {
   }, [highlightId]);
 
   return (
-    <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+    <>
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
       {/* Index / navigation box in first slot */}
       <aside className="border rounded-md p-2 bg-zinc-50/60">
         <div
@@ -141,5 +144,37 @@ export function PageClient({ articles }: Props) {
         );
       })}
     </div>
+
+      {comics.length > 0 && (
+        <section className="mt-10 border-t pt-6">
+          <h2 className="font-serif text-2xl text-center mb-1">Daily Funnies</h2>
+          <p className="text-center text-xs text-zinc-500 mb-6 uppercase tracking-wide">
+            The lighter side of The AI Times
+          </p>
+          <div className="grid md:grid-cols-2 gap-8">
+            {comics.map((comic: Comic) => (
+              <div key={comic.id} className="border rounded-md overflow-hidden bg-white shadow-sm">
+                <div className="bg-zinc-100 px-4 py-2 border-b">
+                  <p className="font-serif font-semibold text-lg">{comic.title}</p>
+                  <p className="text-xs text-zinc-500 uppercase tracking-wide">
+                    {comic.comic_type === "family" ? "Family Comic" : "Byte & Rex · AI in the Office"}
+                  </p>
+                </div>
+                <img
+                  src={comic.image_url}
+                  alt={comic.title ?? "Daily comic"}
+                  className="w-full object-cover"
+                />
+                {comic.caption && (
+                  <p className="px-4 py-3 text-sm italic text-zinc-700 border-t bg-zinc-50">
+                    {comic.caption}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+    </>
   );
 }
