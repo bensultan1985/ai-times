@@ -2,7 +2,7 @@ import { query } from "./db.ts";
 
 export type Comic = {
   id: number;
-  comic_type: "family" | "ai_dog";
+  comic_type: "family" | "ai_dog" | "teen_bot";
   title: string | null;
   caption: string | null;
   image_url: string;
@@ -19,7 +19,7 @@ export async function getComicsForToday(): Promise<Comic[]> {
 }
 
 export async function insertComic(opts: {
-  comic_type: "family" | "ai_dog";
+  comic_type: "family" | "ai_dog" | "teen_bot";
   title?: string;
   caption?: string;
   image_url: string;
@@ -86,7 +86,7 @@ export async function insertComic(opts: {
 }
 
 export async function upsertComic(opts: {
-  comic_type: "family" | "ai_dog";
+  comic_type: "family" | "ai_dog" | "teen_bot";
   title?: string;
   caption?: string;
   image_url: string;

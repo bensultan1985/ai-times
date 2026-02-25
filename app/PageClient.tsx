@@ -6,47 +6,6 @@ import type { Comic } from "@/lib/comics";
 
 import { parseBodyAndCitations } from "./parseBodyAndCitations";
 
-type BubblePosition =
-  | "top-left"
-  | "top-right"
-  | "bottom-left"
-  | "bottom-right"
-  | "center";
-
-type ComicBubble = { text: string; position: BubblePosition };
-
-function getComicBubbles(comic: Comic): ComicBubble[] {
-  const raw: any = (comic as any)?.metadata;
-  const metadata = typeof raw === "string" ? safeJsonParse(raw) : raw;
-  const bubbles = metadata?.bubbles;
-  if (!Array.isArray(bubbles)) return [];
-  return bubbles
-    .filter((b: any) => typeof b?.text === "string" && b.text.trim().length > 0)
-    .slice(0, 2)
-    .map((b: any) => {
-      const position = String(b?.position ?? "top-left") as BubblePosition;
-      const allowed: BubblePosition[] = [
-        "top-left",
-        "top-right",
-        "bottom-left",
-        "bottom-right",
-        "center",
-      ];
-      return {
-        text: String(b.text).trim(),
-        position: allowed.includes(position) ? position : "top-left",
-      };
-    });
-}
-
-function safeJsonParse(text: string): any {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
 type Props = {
   articles: Article[];
   comics: Comic[];
@@ -200,7 +159,9 @@ export function PageClient({ articles, comics }: Props) {
             {comics.map((comic: Comic) => (
               <div
                 key={comic.id}
-                className="border rounded-md overflow-hidden bg-white shadow-sm"
+                className={`border rounded-md overflow-hidden bg-white shadow-sm ${
+                  comic.comic_type === "teen_bot" ? "md:col-span-2" : ""
+                }`}
               >
                 <div className="bg-zinc-100 px-4 py-2 border-b">
                   <p className="font-serif font-semibold text-lg">
@@ -209,24 +170,26 @@ export function PageClient({ articles, comics }: Props) {
                   <p className="text-xs text-zinc-500 uppercase tracking-wide">
                     {comic.comic_type === "family"
                       ? "Family Comic"
-                      : "Byte & Rex · AI in the Office"}
+                      : comic.comic_type === "ai_dog"
+                        ? "Byte & Rex · AI in the Office"
+                        : "Circuit High · School"}
                   </p>
                 </div>
-                <div className="relative">
+                <a
+                  href={comic.image_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block bg-white"
+                  title="Open full size"
+                >
                   <img
                     src={comic.image_url}
                     alt={comic.title ?? "Daily comic"}
-                    className="w-full object-cover"
+                    loading="lazy"
+                    decoding="async"
+                    className="block w-full h-auto"
                   />
-                  {getComicBubbles(comic).map((b, idx) => (
-                    <div
-                      key={`${comic.id}-bubble-${idx}`}
-                      className={`comic-bubble comic-bubble--${b.position}`}
-                    >
-                      {b.text}
-                    </div>
-                  ))}
-                </div>
+                </a>
                 {comic.caption && (
                   <p className="px-4 py-3 text-sm italic text-zinc-700 border-t bg-zinc-50">
                     {comic.caption}
