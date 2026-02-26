@@ -4,19 +4,7 @@
     "These are prompt-only voice guidelines to encourage consistency across segments.",
     "Avoid mentioning these details explicitly in spoken dialogue; they are direction for the generator."
   ],
-  "global": {
-    "mix": {
-      "loudnessTarget": "broadcast-like, intelligible speech; avoid clipping",
-
-      "noiseFloor": "very low; no background music",
-      "roomTone": "subtle living-room ambience only (optional)"
-    },
-    "acting": {
-      "pace": "conversational sitcom pace; no rapid-fire delivery",
-      "energy": "warm, grounded; occasional punchy sarcasm",
-      "overlap": "no crosstalk; speak one at a time"
-    }
-  },
+  "global": {},
   "characters": {
     "Juan": {
       "role": "AI robot breadwinner; earnest, thoughtful",
@@ -56,7 +44,7 @@
         "tone": "dry, sharp, deadpan; controlled confidence",
         "pitch": "slightly lower than Juan",
         "timbre": "robotic with a crisp digital edge; slightly more metallic than Juan",
-        "accent": "neutral American",
+        "accent": "slight Southern California accent (not strong or caricatured)",
         "texture": "subtle vocoder-like steadiness; still natural-sounding speech",
         "prosody": {
           "cadence": "tight and efficient; quick punchlines",
@@ -74,41 +62,25 @@
         "Sound like a distinct robot voice from Juan",
         "Keep it intelligible and not overly processed"
       ],
-      "dont": [
-        "Don’t sound identical to Juan",
-        "Don’t become too aggressive or shouty",
-        "Don’t use exaggerated comedian delivery"
-      ]
+      "dont": []
     },
     "Lyle": {
-      "role": "human roommate; middle-aged; resistant to change but warm",
+      "role": "human roommate; middle-aged; resistant to change but sometimes warm",
       "voice": {
         "ageImpression": "middle-aged (40s–60s)",
-        "tone": "weary, practical, slightly grumbly; with an underlying warmth",
+        "tone": "weary, resigned, slightly grumbly; with an underlying warmth at times",
         "pitch": "mid-low",
         "timbre": "fully human; a touch raspy; relaxed throat",
-        "accent": "everyday American; slight regional ambiguity (not strong)",
+        "accent": "lower middle class American (no strong regional accent)",
         "texture": "natural breath; occasional sigh",
         "prosody": {
-          "cadence": "slower than the robots; short pauses as if thinking",
           "emphasis": "emphasizes complaints; softens on heartfelt beats",
-          "humorStyle": "curmudgeonly; grounded one-liners; reluctant affection"
-        },
-        "signature": [
-          "Small exhale-laugh when conceding",
-          "Occasional throat-clear at start of a rant (subtle)",
-          "Ends some lines with a resigned downward intonation"
-        ]
+          "humorStyle": "curmudgeonly; grounded one-liners; reluctant affection sometimes"
+        }
       },
       "do": [
         "Sound human and distinct from both robots",
-        "Keep it sitcom-natural, not cartoonish",
-        "Let warmth show on the resolution"
-      ],
-      "dont": [
-        "Don’t sound elderly",
-        "Don’t sound like a caricature accent",
-        "Don’t add slurred speech"
+        "Keep it sitcom-natural, not cartoonish"
       ]
     }
   }
