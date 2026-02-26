@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
+import { toFile } from "openai";
 import path from "node:path";
 import fs from "node:fs/promises";
-import { spawn } from "node:child_process";
-import ffmpegPath from "ffmpeg-static";
-import { upsertVideoEpisode } from "@/lib/videos";
+import fsSync from "node:fs";
+import { getVideoEpisodeByWeekKey, upsertVideoEpisode } from "@/lib/videos";
+import sharp from "sharp";
 
 export const runtime = "nodejs";
 
@@ -152,219 +153,194 @@ async function generateStillImageB64(prompt: string): Promise<Buffer> {
   throw new Error("No image returned");
 }
 
-async function generateAnimatedFrames(opts: {
-  tmpDir: string;
-  basePrompt: string;
-  frames: number;
-}): Promise<{ firstFramePath: string; patternPath: string }> {
-  const { tmpDir, basePrompt, frames } = opts;
-  const frameDir = path.join(tmpDir, "frames");
-  await fs.mkdir(frameDir, { recursive: true });
+async function createVideoJob(opts: {
+  model: "sora-2" | "sora-2-pro";
+  prompt: string;
+  seconds: 4 | 8 | 12;
+  size: "720x1280" | "1280x720" | "1024x1792" | "1792x1024";
+  inputReferencePath?: string;
+  inputReferenceBuffer?: Buffer;
+  inputReferenceFileName?: string;
+}): Promise<{ id: string; status: string; seconds: string; size: string }> {
+  const {
+    model,
+    prompt,
+    seconds,
+    size,
+    inputReferencePath,
+    inputReferenceBuffer,
+    inputReferenceFileName,
+  } = opts;
 
-  for (let idx = 1; idx <= frames; idx += 1) {
-    const framePrompt = `${basePrompt}
-
-ANIMATION INSTRUCTIONS:
-- This is frame ${idx} of ${frames} in a short 2D animated shot.
-- Keep the same characters, camera, outfits, and living room layout consistent across frames.
-- Only small, natural motion between frames (head turn, blink, hand gesture, slight posture shift, rocking chair subtly rocking).
-- No readable text.
-`;
-
-    const imageBuf = await generateStillImageB64(framePrompt);
-    const framePath = path.join(
-      frameDir,
-      `frame-${String(idx).padStart(3, "0")}.png`,
+  const createArgs: any = { model, prompt, seconds, size };
+  const refName =
+    inputReferenceFileName ||
+    (inputReferencePath ? path.basename(inputReferencePath) : "reference.png");
+  if (inputReferenceBuffer) {
+    createArgs.input_reference = await toFile(inputReferenceBuffer, refName, {
+      type: "image/png",
+    });
+  } else if (inputReferencePath) {
+    createArgs.input_reference = await toFile(
+      fsSync.createReadStream(inputReferencePath),
+      refName,
+      { type: "image/png" },
     );
-    await fs.writeFile(framePath, imageBuf);
   }
 
-  const firstFramePath = path.join(frameDir, "frame-001.png");
-  const patternPath = path.join(frameDir, "frame-%03d.png");
-  return { firstFramePath, patternPath };
+  const video: any = await withRetry(
+    () => (openai as any).videos.create(createArgs),
+    "video.create",
+  );
+
+  return {
+    id: String(video.id),
+    status: String(video.status ?? "queued"),
+    seconds: String(video.seconds ?? seconds),
+    size: String(video.size ?? size),
+  };
 }
 
-async function generateTtsMp3(text: string, voice: string): Promise<Buffer> {
-  const primaryModel = process.env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts";
-  const fallbackModel = "tts-1";
-
-  const tryModel = async (model: string) => {
-    const resp: any = await withRetry(
-      () =>
-        openai.audio.speech.create({
-          model,
-          voice,
-          input: text,
-          format: "mp3",
-        } as any),
-      `tts(${model})`,
-    );
-
-    // openai sdk returns a Response-like object
-    const ab = await resp.arrayBuffer();
-    return Buffer.from(ab);
-  };
+async function buildReferenceImage(
+  tmpRoot: string,
+  scriptTitle: string,
+): Promise<string> {
+  const outPath = path.join(tmpRoot, "reference-1280x720.png");
 
   try {
-    return await tryModel(primaryModel);
+    await fs.access(outPath);
+    return outPath;
   } catch {
-    return await tryModel(fallbackModel);
-  }
-}
-
-async function runFfmpeg(args: string[], cwd: string): Promise<void> {
-  if (!ffmpegPath)
-    throw new Error("ffmpeg binary not available (ffmpeg-static)");
-
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(ffmpegPath as string, args, {
-      cwd,
-      stdio: ["ignore", "ignore", "pipe"],
-    });
-
-    let stderr = "";
-    child.stderr.on("data", (d) => (stderr += d.toString()));
-
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) return resolve();
-      reject(
-        new Error(`ffmpeg exited with code ${code}: ${stderr.slice(-2000)}`),
-      );
-    });
-  });
-}
-
-function voiceForSpeaker(speaker: ScriptLine["speaker"]): string {
-  // Voices are best-effort; can be overridden by env.
-  const juan = process.env.OPENAI_VOICE_JUAN || "nova";
-  const xero = process.env.OPENAI_VOICE_XERO || "alloy";
-  const lyle = process.env.OPENAI_VOICE_LYLE || "onyx";
-
-  if (speaker === "Juan") return juan;
-  if (speaker === "Xero") return xero;
-  return lyle;
-}
-
-function sanitizeSpokenText(text: string): string {
-  let t = String(text ?? "").trim();
-
-  // Remove common script-y prefixes the model might accidentally include.
-  // Examples: "Juan: ...", "Xero - ...", "LYLE: ..."
-  t = t.replace(/^(juan|xero|lyle)\s*[:\-–—]\s*/i, "");
-
-  // Defensive: if it starts with any name-like ALLCAPS prefix, drop it.
-  t = t.replace(/^[A-Z]{2,12}\s*[:\-–—]\s*/, "");
-
-  // Collapse excessive whitespace.
-  t = t.replace(/\s+/g, " ").trim();
-  return t;
-}
-
-async function buildSegmentAudio(
-  tmpDir: string,
-  dialogue: ScriptLine[],
-): Promise<string> {
-  const lineFiles: string[] = [];
-  let i = 0;
-  for (const line of dialogue) {
-    i += 1;
-    const voice = voiceForSpeaker(line.speaker);
-    const spoken = sanitizeSpokenText(line.text);
-    const mp3 = await generateTtsMp3(spoken, voice);
-    const file = path.join(tmpDir, `line-${i}.mp3`);
-    await fs.writeFile(file, mp3);
-    lineFiles.push(file);
+    // continue
   }
 
-  // Concat (re-encode for stability).
-  const listPath = path.join(tmpDir, "concat.txt");
-  const list = lineFiles
-    .map((f) => `file '${f.replace(/'/g, "'\\''")}'`)
+  const modelingRoot = path.join(process.cwd(), "lib", "video-modeling");
+  const livingRoomPath = path.join(modelingRoot, "settings", "living room.png");
+  const juanPath = path.join(modelingRoot, "characters", "juan.png");
+  const xeroPath = path.join(modelingRoot, "characters", "xero.png");
+  const lylePath = process.env.OPENAI_VIDEO_LYLE_IMAGE
+    ? path.isAbsolute(process.env.OPENAI_VIDEO_LYLE_IMAGE)
+      ? process.env.OPENAI_VIDEO_LYLE_IMAGE
+      : path.join(process.cwd(), process.env.OPENAI_VIDEO_LYLE_IMAGE)
+    : path.join(modelingRoot, "characters", "lyle.png");
+
+  const fileExists = async (p: string) => {
+    try {
+      await fs.access(p);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const canUseModelingAssets =
+    (await fileExists(livingRoomPath)) &&
+    (await fileExists(juanPath)) &&
+    (await fileExists(xeroPath));
+
+  if (canUseModelingAssets) {
+    const base = sharp(await fs.readFile(livingRoomPath))
+      .resize(1280, 720, { fit: "cover" })
+      .png();
+
+    const loadAndResize = async (p: string, targetHeight: number) => {
+      const input = await fs.readFile(p);
+      const { data, info } = await sharp(input)
+        .resize({ height: targetHeight, fit: "contain" })
+        .png()
+        .toBuffer({ resolveWithObject: true });
+      return { data, width: info.width, height: info.height };
+    };
+
+    const bottomMargin = 20;
+    const gap = 40;
+    const juan = await loadAndResize(juanPath, 560);
+    const xero = await loadAndResize(xeroPath, 560);
+
+    const totalCouchWidth = juan.width + gap + xero.width;
+    const startX = Math.max(40, Math.round((1280 - totalCouchWidth) / 2));
+
+    const comps: sharp.OverlayOptions[] = [
+      {
+        input: juan.data,
+        left: startX,
+        top: Math.max(0, 720 - bottomMargin - juan.height),
+      },
+      {
+        input: xero.data,
+        left: startX + juan.width + gap,
+        top: Math.max(0, 720 - bottomMargin - xero.height),
+      },
+    ];
+
+    if (await fileExists(lylePath)) {
+      const lyle = await loadAndResize(lylePath, 580);
+      comps.push({
+        input: lyle.data,
+        left: Math.max(0, 1280 - 80 - lyle.width),
+        top: Math.max(0, 720 - bottomMargin - lyle.height),
+      });
+    }
+
+    await base.composite(comps).toFile(outPath);
+    return outPath;
+  }
+
+  const prompt = `Design a single frame from a 2D animated sitcom set in a living room.
+
+Characters (robots + roommate):
+- Juan: thoughtful AI robot, slightly earnest.
+- Xero: dry, sarcastic AI robot.
+- Lyle: out-of-work middle-aged roommate in a rocking chair holding a drink can.
+
+Blocking:
+- Juan and Xero sit together on a couch.
+- Lyle sits in a rocking chair next to them.
+
+Style:
+- Clean 2D animation, sitcom vibe, warm living room lighting, consistent designs.
+- No readable text.
+
+This is a reference image for the episode titled: ${scriptTitle}`;
+
+  const buf = await generateStillImageB64(prompt);
+
+  await sharp(buf)
+    .resize(1280, 720, {
+      fit: "contain",
+      background: { r: 0, g: 0, b: 0, alpha: 1 },
+    })
+    .png()
+    .toFile(outPath);
+
+  return outPath;
+}
+
+function getBoolEnv(name: string, defaultValue: boolean): boolean {
+  const v = process.env[name];
+  if (v == null) return defaultValue;
+  const s = String(v).trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(s)) return true;
+  if (["0", "false", "no", "n", "off"].includes(s)) return false;
+  return defaultValue;
+}
+
+function buildDialogueForPrompt(lines: ScriptLine[]): {
+  speakerPlan: string;
+  spokenLines: string;
+} {
+  const speakerPlan = lines
+    .map((l, idx) => `Line ${idx + 1}: ${l.speaker}`)
     .join("\n");
-  await fs.writeFile(listPath, list);
-
-  const combinedMp3 = path.join(tmpDir, "combined.mp3");
-  await runFfmpeg(
-    [
-      "-y",
-      "-f",
-      "concat",
-      "-safe",
-      "0",
-      "-i",
-      listPath,
-      "-c:a",
-      "libmp3lame",
-      "-q:a",
-      "4",
-      combinedMp3,
-    ],
-    tmpDir,
-  );
-
-  // Pad + trim to exactly 12s and output as AAC.
-  const outM4a = path.join(tmpDir, "audio.m4a");
-  await runFfmpeg(
-    [
-      "-y",
-      "-i",
-      combinedMp3,
-      "-filter:a",
-      "apad=pad_dur=12,atrim=0:12",
-      "-c:a",
-      "aac",
-      "-b:a",
-      "128k",
-      outM4a,
-    ],
-    tmpDir,
-  );
-
-  return outM4a;
+  const spokenLines = lines
+    .map((l) => String(l.text ?? "").trim())
+    .filter(Boolean)
+    .map((t, idx) => `Line ${idx + 1}: ${t}`)
+    .join("\n");
+  return { speakerPlan, spokenLines };
 }
 
-async function buildSegmentVideoFromFrames(
-  tmpDir: string,
-  framesPattern: string,
-  framesCount: number,
-  audioPath: string,
-  outPath: string,
-): Promise<void> {
-  // Render to 1280x720 with padding (never crop) and exactly 12s.
-  // Use a rational framerate so the sequence duration is exactly 12s.
-  const inputFps = `${framesCount}/12`;
-  await runFfmpeg(
-    [
-      "-y",
-      "-framerate",
-      inputFps,
-      "-i",
-      framesPattern,
-      "-i",
-      audioPath,
-      "-t",
-      "12",
-      "-vf",
-      "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,minterpolate=fps=30:mi_mode=mci",
-      "-c:v",
-      "libx264",
-      "-pix_fmt",
-      "yuv420p",
-      "-r",
-      "30",
-      "-c:a",
-      "aac",
-      "-b:a",
-      "128k",
-      "-shortest",
-      outPath,
-    ],
-    tmpDir,
-  );
-}
-
-export async function POST() {
+export async function POST(req: Request) {
   try {
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json(
@@ -373,13 +349,49 @@ export async function POST() {
       );
     }
 
+    const url = new URL(req.url);
+    let force = url.searchParams.get("force") === "1";
+    try {
+      const body = await req.json().catch(() => null);
+      if (body && typeof body === "object" && "force" in body) {
+        force = Boolean((body as any).force);
+      }
+    } catch {
+      // ignore invalid json
+    }
+
     const weekKey = getWeekKey();
+
+    // If we've already generated this week's episode, return it quickly unless forced.
+    if (!force) {
+      const existing = await getVideoEpisodeByWeekKey(weekKey);
+      if (existing && existing.segments?.length > 0) {
+        return NextResponse.json({
+          week_key: existing.week_key,
+          title: existing.title ?? "",
+          logline: existing.logline ?? "",
+          segments: existing.segments.map((s) => ({
+            segment_index: s.segment_index,
+            segment_name: s.segment_name,
+            video_url: s.video_url,
+            duration_seconds: s.duration_seconds,
+          })),
+        });
+      }
+    }
+
     const tmpRoot = path.join(process.cwd(), ".tmp", "weekly-video", weekKey);
-    const outDir = path.join(process.cwd(), "public", "videos", weekKey);
     await fs.mkdir(tmpRoot, { recursive: true });
-    await fs.mkdir(outDir, { recursive: true });
 
     const script = await generateEpisodeScript();
+
+    const useReference = getBoolEnv("OPENAI_VIDEO_USE_REFERENCE", true);
+    const referenceImagePath = useReference
+      ? await buildReferenceImage(tmpRoot, script.title)
+      : null;
+    const referenceImageBuffer = referenceImagePath
+      ? await fs.readFile(referenceImagePath)
+      : null;
 
     // Normalize segments
     const desiredOrder: SegmentScript["segment_name"][] = [
@@ -399,46 +411,67 @@ export async function POST() {
       return seg;
     });
 
-    const segmentResults: Array<{
-      segment_index: number;
-      segment_name: string;
-      video_url: string;
-      duration_seconds: number;
-    }> = [];
+    const videoModel = (process.env.OPENAI_VIDEO_MODEL || "sora-2") as
+      | "sora-2"
+      | "sora-2-pro";
 
-    for (let i = 0; i < segments.length; i += 1) {
-      const seg = segments[i];
-      const segTmp = path.join(tmpRoot, `${i}-${seg.segment_name}`);
-      await fs.mkdir(segTmp, { recursive: true });
+    const jobs = await Promise.all(
+      segments.map(async (seg, i) => {
+        const { speakerPlan, spokenLines } = buildDialogueForPrompt(
+          seg.dialogue,
+        );
 
-      const framesCount = Number(process.env.VIDEO_ANIM_FRAMES || "10");
-      const basePrompt = `${seg.visual_prompt}\n\nScene setup must include: Juan and Xero robots sitting on a couch; Lyle in a rocking chair next to them holding a drink can. Living room. 2D animated cartoon style. No readable text.`;
+        const videoPrompt = `2D animated sitcom scene in a living room, with synced audio.
 
-      const { patternPath } = await generateAnimatedFrames({
-        tmpDir: segTmp,
-        basePrompt,
-        frames: framesCount,
-      });
+${useReference ? "Characters and layout must match the provided reference image." : "Keep character designs and room layout consistent across the whole episode."}
+- Juan and Xero (robots) sit on a couch.
+- Lyle sits in a rocking chair next to them holding a drink can.
 
-      const audioPath = await buildSegmentAudio(segTmp, seg.dialogue);
+Shot requirements:
+- Keep character designs and room layout consistent.
+- Natural small motions (blinks, nods, hand gestures, subtle rocking chair motion).
+- No readable text.
+- Avoid logos and copyrighted characters.
 
-      const fileName = `${String(i + 1).padStart(2, "0")}-${seg.segment_name}.mp4`;
-      const outPath = path.join(outDir, fileName);
-      await buildSegmentVideoFromFrames(
-        segTmp,
-        patternPath,
-        framesCount,
-        audioPath,
-        outPath,
-      );
+Audio/dialogue requirements:
+- Speak the dialogue naturally.
+- Do NOT read character names out loud (do not say Juan/Xero/Lyle).
+- Use distinct voices: Juan and Xero sound robotic; Lyle sounds human.
+- No music.
 
-      segmentResults.push({
-        segment_index: i,
-        segment_name: seg.segment_name,
-        video_url: `/videos/${weekKey}/${fileName}`,
-        duration_seconds: 12,
-      });
-    }
+Scene setting:
+${seg.setting}
+
+Visual action:
+${seg.visual_prompt}
+
+Speaker plan (NOT spoken):
+${speakerPlan}
+
+Spoken lines (exactly these, in order):
+${spokenLines}`;
+
+        const job = await createVideoJob({
+          model: videoModel,
+          prompt: videoPrompt,
+          seconds: 12,
+          size: "1280x720",
+          inputReferenceBuffer: referenceImageBuffer ?? undefined,
+          inputReferenceFileName: "reference-1280x720.png",
+        });
+
+        return {
+          segment_index: i,
+          segment_name: seg.segment_name,
+          video_url: `/api/video-content/${job.id}`,
+          duration_seconds: 12,
+        };
+      }),
+    );
+
+    const segmentResults = jobs.sort(
+      (a, b) => a.segment_index - b.segment_index,
+    );
 
     await upsertVideoEpisode({
       week_key: weekKey,

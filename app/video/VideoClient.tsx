@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type Segment = {
   segment_index: number;
@@ -20,10 +20,25 @@ type Props = {
   initialEpisode: Episode | null;
 };
 
+type SegmentStatus = {
+  status: string;
+  progress: number | null;
+  error: string | null;
+};
+
+function extractVideoId(videoUrl: string): string | null {
+  // Expect /api/video-content/<video_id>
+  const m = /^\/api\/video-content\/([^/?#]+)\/?$/.exec(videoUrl);
+  return m?.[1] ?? null;
+}
+
 export function VideoClient({ initialEpisode }: Props) {
   const [episode, setEpisode] = useState<Episode | null>(initialEpisode);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [segmentStatus, setSegmentStatus] = useState<
+    Record<string, SegmentStatus>
+  >({});
 
   const orderedSegments = useMemo(() => {
     const segments = episode?.segments ?? [];
@@ -31,6 +46,53 @@ export function VideoClient({ initialEpisode }: Props) {
   }, [episode]);
 
   const videoRefs = useRef<Array<HTMLVideoElement | null>>([]);
+
+  const refreshStatus = async () => {
+    const segments = orderedSegments;
+    if (segments.length === 0) return;
+
+    const updates: Record<string, SegmentStatus> = {};
+    await Promise.all(
+      segments.map(async (seg) => {
+        const videoId = extractVideoId(seg.video_url);
+        if (!videoId) {
+          updates[seg.segment_name] = {
+            status: "unknown",
+            progress: null,
+            error: "Unrecognized video_url",
+          };
+          return;
+        }
+
+        try {
+          const res = await fetch(`/api/video-status/${videoId}`);
+          const json = await res.json();
+          updates[seg.segment_name] = {
+            status: String(json?.status ?? "unknown"),
+            progress: json?.progress ?? null,
+            error: json?.error?.message ? String(json.error.message) : null,
+          };
+        } catch (e: any) {
+          updates[seg.segment_name] = {
+            status: "error",
+            progress: null,
+            error: e?.message ?? String(e),
+          };
+        }
+      }),
+    );
+
+    setSegmentStatus((prev) => ({ ...prev, ...updates }));
+  };
+
+  useEffect(() => {
+    void refreshStatus();
+    const timer = setInterval(() => {
+      void refreshStatus();
+    }, 10000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [episode?.week_key, orderedSegments.length]);
 
   const generate = async () => {
     setBusy(true);
@@ -40,6 +102,7 @@ export function VideoClient({ initialEpisode }: Props) {
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || "Failed to generate");
       setEpisode(json);
+      setSegmentStatus({});
     } catch (e: any) {
       setError(e?.message ?? String(e));
     } finally {
@@ -49,8 +112,13 @@ export function VideoClient({ initialEpisode }: Props) {
 
   const playAll = async () => {
     if (orderedSegments.length === 0) return;
-    for (let i = 0; i < orderedSegments.length; i += 1) {
-      const v = videoRefs.current[i];
+
+    for (let idx = 0; idx < orderedSegments.length; idx += 1) {
+      const seg = orderedSegments[idx];
+      const st = segmentStatus[seg.segment_name];
+      if (st?.status !== "completed") continue;
+
+      const v = videoRefs.current[idx];
       if (!v) continue;
       v.currentTime = 0;
       // eslint-disable-next-line no-await-in-loop
@@ -97,6 +165,14 @@ export function VideoClient({ initialEpisode }: Props) {
             </button>
             <button
               type="button"
+              onClick={refreshStatus}
+              disabled={!episode || orderedSegments.length === 0}
+              className="px-3 py-2 text-sm rounded-md border bg-white disabled:opacity-50"
+            >
+              Refresh Status
+            </button>
+            <button
+              type="button"
               onClick={playAll}
               disabled={!episode || orderedSegments.length === 0}
               className="px-3 py-2 text-sm rounded-md border bg-white disabled:opacity-50"
@@ -128,18 +204,43 @@ export function VideoClient({ initialEpisode }: Props) {
                 <p className="text-sm font-semibold">
                   {idx + 1}. {seg.segment_name.replace(/_/g, " ")}
                 </p>
-                <p className="text-xs text-zinc-500">{seg.duration_seconds}s</p>
+                <div className="flex items-center gap-3">
+                  <p className="text-xs text-zinc-500">
+                    {seg.duration_seconds}s
+                  </p>
+                  <p className="text-xs text-zinc-500">
+                    {segmentStatus[seg.segment_name]?.status ?? "queued"}
+                    {typeof segmentStatus[seg.segment_name]?.progress ===
+                    "number"
+                      ? ` (${segmentStatus[seg.segment_name]!.progress}%)`
+                      : ""}
+                  </p>
+                </div>
               </div>
-              <video
-                ref={(el) => {
-                  videoRefs.current[idx] = el;
-                }}
-                src={seg.video_url}
-                controls
-                playsInline
-                preload="metadata"
-                className="w-full bg-black"
-              />
+              {segmentStatus[seg.segment_name]?.status === "completed" ? (
+                <video
+                  ref={(el) => {
+                    videoRefs.current[idx] = el;
+                  }}
+                  src={seg.video_url}
+                  controls
+                  playsInline
+                  preload="metadata"
+                  className="w-full bg-black"
+                />
+              ) : (
+                <div className="p-4 text-sm text-zinc-700">
+                  <p>
+                    Rendering… this can take a few minutes. Click “Refresh
+                    Status” or wait.
+                  </p>
+                  {segmentStatus[seg.segment_name]?.error && (
+                    <p className="mt-2 text-red-600">
+                      Error: {segmentStatus[seg.segment_name]!.error}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
