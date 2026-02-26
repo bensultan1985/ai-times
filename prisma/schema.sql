@@ -39,8 +39,18 @@ CREATE TABLE IF NOT EXISTS video_segments (
     segment_index INTEGER NOT NULL,
     segment_name VARCHAR(50) NOT NULL,
     video_url TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 1,
     duration_seconds INTEGER NOT NULL DEFAULT 12,
+    video_prompt TEXT,
+    last_error JSONB,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     UNIQUE (episode_id, segment_index)
 );
 CREATE INDEX IF NOT EXISTS idx_video_segments_episode_id ON video_segments (episode_id);
+-- Backfill columns for existing dev databases
+ALTER TABLE video_segments
+ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE video_segments
+ADD COLUMN IF NOT EXISTS video_prompt TEXT;
+ALTER TABLE video_segments
+ADD COLUMN IF NOT EXISTS last_error JSONB;

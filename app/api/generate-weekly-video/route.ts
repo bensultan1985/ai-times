@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import { getVideoEpisodeByWeekKey, upsertVideoEpisode } from "@/lib/videos";
 import sharp from "sharp";
+import { getVoiceGuidanceForPrompt } from "@/lib/videoVoices";
 
 export const runtime = "nodejs";
 
@@ -85,6 +86,7 @@ Rules:
 - All dialogue must be clear English.
 - The spoken text must NOT include character name prefixes (no "Juan:", "Xero:", "Lyle:"). The speaker is provided in the separate "speaker" field.
 - Include a consistent living-room setting: Juan and Xero on a couch; Lyle in a rocking chair next to them holding a drink can.
+- Off-screen dialogue is allowed (it can feel realistic), but if you do it, you MUST explicitly indicate it in "visual_prompt" (e.g., "(OFFSCREEN)" or "voice from kitchen") and ensure the camera framing matches.
 
 Return ONLY valid JSON in exactly this shape:
 {
@@ -325,6 +327,80 @@ function getBoolEnv(name: string, defaultValue: boolean): boolean {
   return defaultValue;
 }
 
+async function fileExists(p: string): Promise<boolean> {
+  try {
+    await fs.access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function tryAcquireLock(lockPath: string): Promise<boolean> {
+  try {
+    await fs.mkdir(path.dirname(lockPath), { recursive: true });
+    const h = await fs.open(lockPath, "wx");
+    await h.close();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function finalizeEpisodeInBackground(opts: {
+  origin: string;
+  weekKey: string;
+}): Promise<void> {
+  const { origin, weekKey } = opts;
+  const tmpRoot = path.join(process.cwd(), ".tmp", "weekly-video", weekKey);
+  const lockPath = path.join(tmpRoot, "finalize.lock");
+  const assembledPath = path.join(tmpRoot, "episode-with-title.mp4");
+
+  if (await fileExists(assembledPath)) return;
+  const locked = await tryAcquireLock(lockPath);
+  if (!locked) return;
+
+  const maxMinutes = 25;
+  const pollMs = 15_000;
+  const maxAttempts = Math.ceil((maxMinutes * 60_000) / pollMs);
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const stRes = await fetch(
+        `${origin}/api/video-episode-status?week_key=${encodeURIComponent(weekKey)}`,
+        { cache: "no-store" },
+      );
+      const stJson: any = await stRes.json().catch(() => null);
+      const overall = String(stJson?.overall_status ?? "unknown");
+
+      if (overall === "completed") {
+        // Assemble & cache combined episode; return JSON meta only (no MP4 download).
+        const combineRes = await fetch(
+          `${origin}/api/video-episode-content?week_key=${encodeURIComponent(weekKey)}&meta=1`,
+          { cache: "no-store" },
+        );
+        if (combineRes.ok) {
+          return;
+        }
+
+        // If combine failed, stop retrying here; status polling can be re-triggered later.
+        const errJson: any = await combineRes.json().catch(() => null);
+        const msg = errJson?.error ? String(errJson.error) : "combine failed";
+        console.warn("[generate-weekly-video] auto-assemble failed", msg);
+        return;
+      }
+
+      if (overall === "error") {
+        return;
+      }
+    } catch (e) {
+      console.warn("[generate-weekly-video] auto-finalize poll failed", e);
+    }
+
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+}
+
 function buildDialogueForPrompt(lines: ScriptLine[]): {
   speakerPlan: string;
   spokenLines: string;
@@ -415,6 +491,8 @@ export async function POST(req: Request) {
       | "sora-2"
       | "sora-2-pro";
 
+    const voiceGuidance = await getVoiceGuidanceForPrompt();
+
     const jobs = await Promise.all(
       segments.map(async (seg, i) => {
         const { speakerPlan, spokenLines } = buildDialogueForPrompt(
@@ -438,6 +516,16 @@ Audio/dialogue requirements:
 - Do NOT read character names out loud (do not say Juan/Xero/Lyle).
 - Use distinct voices: Juan and Xero sound robotic; Lyle sounds human.
 - No music.
+- CRITICAL LIP-SYNC RULE: Only the current line's designated speaker is allowed to visibly speak (mouth movement) during that line.
+- If the designated speaker is OFFSCREEN for a line, then NO onscreen character may move their mouth to match that voice. They can react silently, but no ventriloquism.
+- If a character is onscreen but not the designated speaker, their mouth must stay closed/neutral for that line.
+
+${
+  voiceGuidance
+    ? `${voiceGuidance}
+`
+    : ""
+}
 
 Scene setting:
 ${seg.setting}
@@ -464,7 +552,10 @@ ${spokenLines}`;
           segment_index: i,
           segment_name: seg.segment_name,
           video_url: `/api/video-content/${job.id}`,
+          attempt_count: 1,
           duration_seconds: 12,
+          video_prompt: videoPrompt,
+          last_error: null,
         };
       }),
     );
@@ -480,6 +571,15 @@ ${spokenLines}`;
       script,
       segments: segmentResults,
     });
+
+    // Best-effort: finalize in background (cache segments + assemble combined episode).
+    // Note: This is reliable in a long-running Node server, but may not run to completion
+    // in short-lived serverless runtimes.
+    const autoAssemble = getBoolEnv("OPENAI_VIDEO_AUTO_ASSEMBLE", true);
+    if (autoAssemble) {
+      const origin = new URL(req.url).origin;
+      void finalizeEpisodeInBackground({ origin, weekKey });
+    }
 
     return NextResponse.json({
       week_key: weekKey,

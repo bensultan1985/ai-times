@@ -33,6 +33,16 @@ export async function ensureSchema(): Promise<void> {
     await pool.query(
       "ALTER TABLE comics ADD COLUMN IF NOT EXISTS metadata JSONB",
     );
+
+    await pool.query(
+      "ALTER TABLE video_segments ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 1",
+    );
+    await pool.query(
+      "ALTER TABLE video_segments ADD COLUMN IF NOT EXISTS video_prompt TEXT",
+    );
+    await pool.query(
+      "ALTER TABLE video_segments ADD COLUMN IF NOT EXISTS last_error JSONB",
+    );
   })().catch((err) => {
     // Allow a future retry if schema init failed for a transient reason.
     schemaEnsured = null;

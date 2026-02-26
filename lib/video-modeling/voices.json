@@ -1,0 +1,115 @@
+{
+  "version": 1,
+  "notes": [
+    "These are prompt-only voice guidelines to encourage consistency across segments.",
+    "Avoid mentioning these details explicitly in spoken dialogue; they are direction for the generator."
+  ],
+  "global": {
+    "mix": {
+      "loudnessTarget": "broadcast-like, intelligible speech; avoid clipping",
+
+      "noiseFloor": "very low; no background music",
+      "roomTone": "subtle living-room ambience only (optional)"
+    },
+    "acting": {
+      "pace": "conversational sitcom pace; no rapid-fire delivery",
+      "energy": "warm, grounded; occasional punchy sarcasm",
+      "overlap": "no crosstalk; speak one at a time"
+    }
+  },
+  "characters": {
+    "Juan": {
+      "role": "AI robot breadwinner; earnest, thoughtful",
+      "voice": {
+        "ageImpression": "adult (late 20s–40s)",
+        "tone": "kind, sincere, slightly hopeful",
+        "pitch": "mid",
+        "timbre": "clean robotic resonance; smooth formants; no harsh buzz",
+        "accent": "neutral American",
+        "texture": "light synthetic sheen; not metallic; minimal distortion",
+        "prosody": {
+          "cadence": "measured; small pauses before key words",
+          "emphasis": "gently emphasizes emotional words; avoids shouting",
+          "humorStyle": "unintentional comedy; earnest setups"
+        },
+        "signature": [
+          "Slightly softer consonants",
+          "Ends statements with subtle upward warmth (not a question)",
+          "Occasional micro-chuckle breath (very subtle)"
+        ]
+      },
+      "do": [
+        "Sound robotic but approachable",
+        "Keep articulation clear and friendly",
+        "Deliver heartfelt lines without melodrama"
+      ],
+      "dont": [
+        "Don’t sound childlike",
+        "Don’t sound like a villain AI",
+        "Don’t add beeps, boops, or modem noises"
+      ]
+    },
+    "Xero": {
+      "role": "AI robot breadwinner; dry, sarcastic",
+      "voice": {
+        "ageImpression": "adult (late 20s–40s)",
+        "tone": "dry, sharp, deadpan; controlled confidence",
+        "pitch": "slightly lower than Juan",
+        "timbre": "robotic with a crisp digital edge; slightly more metallic than Juan",
+        "accent": "neutral American",
+        "texture": "subtle vocoder-like steadiness; still natural-sounding speech",
+        "prosody": {
+          "cadence": "tight and efficient; quick punchlines",
+          "emphasis": "stresses the final word of a joke",
+          "humorStyle": "sarcasm; dry undercutting; little warmth until rare moments"
+        },
+        "signature": [
+          "Very consistent volume",
+          "Small skeptical scoff on some punchlines (subtle)",
+          "Slightly clipped endings on sarcastic lines"
+        ]
+      },
+      "do": [
+        "Maintain deadpan sarcasm",
+        "Sound like a distinct robot voice from Juan",
+        "Keep it intelligible and not overly processed"
+      ],
+      "dont": [
+        "Don’t sound identical to Juan",
+        "Don’t become too aggressive or shouty",
+        "Don’t use exaggerated comedian delivery"
+      ]
+    },
+    "Lyle": {
+      "role": "human roommate; middle-aged; resistant to change but warm",
+      "voice": {
+        "ageImpression": "middle-aged (40s–60s)",
+        "tone": "weary, practical, slightly grumbly; with an underlying warmth",
+        "pitch": "mid-low",
+        "timbre": "fully human; a touch raspy; relaxed throat",
+        "accent": "everyday American; slight regional ambiguity (not strong)",
+        "texture": "natural breath; occasional sigh",
+        "prosody": {
+          "cadence": "slower than the robots; short pauses as if thinking",
+          "emphasis": "emphasizes complaints; softens on heartfelt beats",
+          "humorStyle": "curmudgeonly; grounded one-liners; reluctant affection"
+        },
+        "signature": [
+          "Small exhale-laugh when conceding",
+          "Occasional throat-clear at start of a rant (subtle)",
+          "Ends some lines with a resigned downward intonation"
+        ]
+      },
+      "do": [
+        "Sound human and distinct from both robots",
+        "Keep it sitcom-natural, not cartoonish",
+        "Let warmth show on the resolution"
+      ],
+      "dont": [
+        "Don’t sound elderly",
+        "Don’t sound like a caricature accent",
+        "Don’t add slurred speech"
+      ]
+    }
+  }
+}
