@@ -39,7 +39,8 @@ export default function RootLayout({
               marginRight: "auto",
             }}
           >
-            <Link href="/">Home</Link> | <Link href="/about">About</Link>
+            <Link href="/">Home</Link> | <Link href="/about">About</Link> |{" "}
+            <Link href="/video">Video</Link>
           </nav>
         </header>
         <main className="max-w-5xl mx-auto p-4">{children}</main>

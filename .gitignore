@@ -17,6 +17,10 @@
 /.next/
 /out/
 
+# local generation artifacts
+/.tmp/
+/public/videos/
+
 # production
 /build
 
