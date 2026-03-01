@@ -24,3 +24,74 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+.comic-bubble {
+  position: absolute;
+  max-width: 70%;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(24, 24, 27, 0.18);
+  border-radius: 18px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+  color: #18181b;
+  font-size: 14px;
+  line-height: 1.2;
+  backdrop-filter: blur(2px);
+}
+
+.comic-bubble::after {
+  content: "";
+  position: absolute;
+  width: 0;
+  height: 0;
+  border: 10px solid transparent;
+}
+
+.comic-bubble--top-left {
+  top: 14px;
+  left: 14px;
+}
+.comic-bubble--top-left::after {
+  left: 18px;
+  bottom: -18px;
+  border-top-color: rgba(255, 255, 255, 0.92);
+}
+
+.comic-bubble--top-right {
+  top: 14px;
+  right: 14px;
+}
+.comic-bubble--top-right::after {
+  right: 18px;
+  bottom: -18px;
+  border-top-color: rgba(255, 255, 255, 0.92);
+}
+
+.comic-bubble--bottom-left {
+  bottom: 14px;
+  left: 14px;
+}
+.comic-bubble--bottom-left::after {
+  left: 18px;
+  top: -18px;
+  border-bottom-color: rgba(255, 255, 255, 0.92);
+}
+
+.comic-bubble--bottom-right {
+  bottom: 14px;
+  right: 14px;
+}
+.comic-bubble--bottom-right::after {
+  right: 18px;
+  top: -18px;
+  border-bottom-color: rgba(255, 255, 255, 0.92);
+}
+
+.comic-bubble--center {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+.comic-bubble--center::after {
+  display: none;
+}

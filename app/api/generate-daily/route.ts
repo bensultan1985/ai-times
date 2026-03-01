@@ -3,6 +3,8 @@ import OpenAI from "openai";
 import { AGENTS } from "@/lib/agents";
 import { insertArticle } from "@/lib/articles";
 
+export const runtime = "nodejs";
+
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
@@ -25,7 +27,7 @@ async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
 
       const delayMs = baseDelay * attempt;
       console.warn(
-        `[withRetry] Rate limited on ${label}, attempt ${attempt} — waiting ${delayMs}ms before retrying...`
+        `[withRetry] Rate limited on ${label}, attempt ${attempt} — waiting ${delayMs}ms before retrying...`,
       );
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
@@ -50,7 +52,7 @@ export async function GET() {
         ? `Here are the headlines already assigned to other AI desk writers today: ${generatedTitles
             .map((t, i) => `${i + 1}. ${t}`)
             .join(
-              " | "
+              " | ",
             )}. Do NOT cover the same specific story or event; choose a clearly different AI news story.`
         : "You are the first AI desk writer generating a headline today.";
 
@@ -84,7 +86,7 @@ export async function GET() {
           ],
           // response_format and temperature are not supported by gpt-5-search-api
         }),
-      `daily-article for agent ${agent.name}`
+      `daily-article for agent ${agent.name}`,
     );
 
     let content = res.choices[0].message.content ?? "";

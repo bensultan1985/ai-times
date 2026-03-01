@@ -11,23 +11,36 @@ export default function RootLayout({
       <body className="bg-zinc-100 text-zinc-900">
         <header className=" bg-white pt-4 pl-4 pr-4 text-center">
           <h1 className="font-serif text-4xl">The AI Times</h1>
-          <nav className="mt-2">
-            <Link href="/">Home</Link> | <Link href="/about">About</Link>
-          </nav>
           <div
             style={{
               textAlign: "center",
+              // background: "rgb(240, 240, 240)",
+              padding: "0px 6px",
+              marginTop: "6px",
+              maxWidth: "992px",
+              width: "fit-content",
+              marginLeft: "auto",
+              marginRight: "auto",
+              color: "rgb(100, 100, 100)",
+              // border: "1px solid rgb(200, 200, 200)",
+            }}
+            className="rounded-md"
+          >
+            AI news, generated daily by AI
+          </div>
+          <nav
+            className="mt-2"
+            style={{
               background: "rgb(240, 240, 240)",
-              padding: "4px 10px",
-              marginTop: "12px",
+              padding: "2px 10px",
+              marginTop: "14px",
               maxWidth: "992px",
               marginLeft: "auto",
               marginRight: "auto",
             }}
-            className="rounded-md"
           >
-            AI news, generated daily by AI.
-          </div>
+            <Link href="/">Home</Link> | <Link href="/about">About</Link>
+          </nav>
         </header>
         <main className="max-w-5xl mx-auto p-4">{children}</main>
         <footer className="border-t bg-white text-center p-2 text-xs">
