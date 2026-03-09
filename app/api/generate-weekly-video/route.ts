@@ -29,7 +29,7 @@ type EpisodeScript = {
 
 // Episode structure knobs:
 // Change this to generate more/fewer segments per episode.
-const SEGMENT_COUNT = 3;
+const SEGMENT_COUNT = 10;
 const SEGMENT_SECONDS: 4 | 8 | 12 = 12;
 
 function getDesiredSegmentNames(segmentCount: number): string[] {
@@ -126,21 +126,73 @@ Constraints for this request:
 - Each segment_name MUST appear exactly once.
 `;
 
+  const jsonSchema: any = {
+    type: "object",
+    additionalProperties: false,
+    required: ["title", "logline", "segments"],
+    properties: {
+      title: { type: "string" },
+      logline: { type: "string" },
+      segments: {
+        type: "array",
+        minItems: desiredSegmentNames.length,
+        maxItems: desiredSegmentNames.length,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["segment_name", "setting", "visual_prompt", "dialogue"],
+          properties: {
+            segment_name: {
+              type: "string",
+              enum: desiredSegmentNames,
+            },
+            setting: { type: "string" },
+            visual_prompt: { type: "string" },
+            dialogue: {
+              type: "array",
+              minItems: 1,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["speaker", "text"],
+                properties: {
+                  speaker: {
+                    type: "string",
+                    enum: ["Juan", "Xero", "Lyle"],
+                  },
+                  text: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+
+  const maxTokens = Math.min(3000, 700 + 140 * desiredSegmentNames.length);
+
   const res = await withRetry(
     () =>
       openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 900,
+        max_tokens: maxTokens,
+        // Enforce valid JSON output.
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "episode_script",
+            strict: true,
+            schema: jsonSchema,
+          },
+        } as any,
       }),
     "script",
   );
 
-  let content = (res.choices[0]?.message?.content ?? "").trim();
-  content = content
-    .replace(/```json/gi, "")
-    .replace(/```/g, "")
-    .trim();
+  const content = (res.choices[0]?.message?.content ?? "").trim();
+  if (!content) throw new Error("Empty script response");
   const parsed = JSON.parse(content);
 
   if (!parsed?.segments || !Array.isArray(parsed.segments)) {
