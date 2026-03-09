@@ -14,6 +14,28 @@ export const runtime = "nodejs";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+const ASSEMBLE_LOCK_TTL_MS = 45 * 60_000;
+
+async function tryAcquireAssembleLock(lockPath: string): Promise<boolean> {
+  try {
+    const st = await fs.stat(lockPath).catch(() => null);
+    if (st && Date.now() - st.mtimeMs > ASSEMBLE_LOCK_TTL_MS) {
+      await fs.rm(lockPath, { force: true }).catch(() => null);
+    }
+
+    await fs.mkdir(path.dirname(lockPath), { recursive: true });
+    const h = await fs.open(lockPath, "wx");
+    await h.close();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function releaseAssembleLock(lockPath: string): Promise<void> {
+  await fs.rm(lockPath, { force: true }).catch(() => null);
+}
+
 function getWeekKey(date = new Date()): string {
   // ISO week: week starts Monday.
   const d = new Date(
@@ -121,6 +143,8 @@ async function normalizeTo16x9(
         "veryfast",
         "-crf",
         "23",
+        "-pix_fmt",
+        "yuv420p",
         "-c:a",
         "aac",
         "-b:a",
@@ -163,6 +187,8 @@ async function normalizeTo16x9(
       "veryfast",
       "-crf",
       "23",
+      "-pix_fmt",
+      "yuv420p",
       "-c:a",
       "aac",
       "-b:a",
@@ -214,6 +240,7 @@ export async function GET(req: Request) {
     const weekKey = episode.week_key;
     const tmpRoot = path.join(process.cwd(), ".tmp", "weekly-video", weekKey);
     const outPath = path.join(tmpRoot, "episode-with-title.mp4");
+    const lockPath = path.join(tmpRoot, "assemble.lock");
 
     if (force) {
       try {
@@ -257,197 +284,226 @@ export async function GET(req: Request) {
       });
     }
 
-    // Prefer assembling from cached segment MP4s (no OpenAI calls required).
-    const orderedSegments = [...episode.segments].sort(
-      (a, b) => a.segment_index - b.segment_index,
-    );
-
-    const segmentVideoIds = orderedSegments.map((s) => {
-      const id = parseVideoIdFromUrl(s.video_url);
-      return {
-        segment_name: s.segment_name,
-        segment_index: s.segment_index,
-        id,
-      };
-    });
-
-    if (segmentVideoIds.some((s) => !s.id)) {
-      return NextResponse.json(
-        {
-          week_key: weekKey,
-          status: "error",
-          error:
-            "One or more segments has an unrecognized video_url; cannot assemble episode",
-        },
-        { status: 500 },
-      );
-    }
-
     await fs.mkdir(tmpRoot, { recursive: true });
-
-    const cachedPaths = await Promise.all(
-      segmentVideoIds.map((s) =>
-        getWeeklyVideoSegmentCachedPathIfFresh({
-          weekKey,
-          segmentIndex: s.segment_index,
-          videoId: String(s.id),
-        }),
-      ),
-    );
-
-    const haveAllCached = cachedPaths.every(Boolean);
-
-    const statuses = haveAllCached
-      ? segmentVideoIds.map((s) => ({
-          ...s,
-          status: "completed",
-          progress: 1,
-          error: null,
-        }))
-      : await Promise.all(
-          segmentVideoIds.map(async (s) => {
-            const video: any = await (openai as any).videos.retrieve(s.id);
-            return {
-              ...s,
-              status: String(video?.status ?? "unknown"),
-              progress: video?.progress ?? null,
-              error: video?.error ?? null,
-            };
-          }),
-        );
-
-    const incomplete = statuses.filter((s) => s.status !== "completed");
-    if (incomplete.length > 0) {
+    const locked = await tryAcquireAssembleLock(lockPath);
+    if (!locked) {
+      // Another request is assembling right now.
+      // Return 202 so callers can poll until the output exists.
       return NextResponse.json(
         {
           week_key: weekKey,
-          status: "rendering",
-          segments: statuses,
+          status: "assembling",
         },
         { status: 202 },
       );
     }
 
-    const segmentsDir = path.join(tmpRoot, "segments");
-    await fs.mkdir(segmentsDir, { recursive: true });
+    try {
+      // Prefer assembling from cached segment MP4s (no OpenAI calls required).
+      const orderedSegments = [...episode.segments].sort(
+        (a, b) => a.segment_index - b.segment_index,
+      );
 
-    const titleSequencePath = process.env.OPENAI_VIDEO_TITLE_SEQUENCE
-      ? path.isAbsolute(process.env.OPENAI_VIDEO_TITLE_SEQUENCE)
-        ? process.env.OPENAI_VIDEO_TITLE_SEQUENCE
-        : path.join(process.cwd(), process.env.OPENAI_VIDEO_TITLE_SEQUENCE)
-      : path.join(
-          process.cwd(),
-          "lib",
-          "video-modeling",
-          "title-sequence",
-          "juan and xero title sequence.mp4",
-        );
-
-    // Download each segment mp4 once.
-    const clipPaths: string[] = [];
-
-    if (await fileExists(titleSequencePath)) {
-      clipPaths.push(titleSequencePath);
-    }
-
-    for (const s of statuses.sort(
-      (a, b) => a.segment_index - b.segment_index,
-    )) {
-      const cached = await getWeeklyVideoSegmentCachedPathIfFresh({
-        weekKey,
-        segmentIndex: s.segment_index,
-        videoId: String(s.id),
+      const segmentVideoIds = orderedSegments.map((s) => {
+        const id = parseVideoIdFromUrl(s.video_url);
+        return {
+          segment_name: s.segment_name,
+          segment_index: s.segment_index,
+          id,
+        };
       });
-      const segmentPath =
-        cached ??
-        (await ensureWeeklyVideoSegmentCached({
+
+      if (segmentVideoIds.some((s) => !s.id)) {
+        return NextResponse.json(
+          {
+            week_key: weekKey,
+            status: "error",
+            error:
+              "One or more segments has an unrecognized video_url; cannot assemble episode",
+          },
+          { status: 500 },
+        );
+      }
+
+      const cachedPaths = await Promise.all(
+        segmentVideoIds.map((s) =>
+          getWeeklyVideoSegmentCachedPathIfFresh({
+            weekKey,
+            segmentIndex: s.segment_index,
+            videoId: String(s.id),
+          }),
+        ),
+      );
+
+      const haveAllCached = cachedPaths.every(Boolean);
+
+      const statuses = haveAllCached
+        ? segmentVideoIds.map((s) => ({
+            ...s,
+            status: "completed",
+            progress: 1,
+            error: null,
+          }))
+        : await Promise.all(
+            segmentVideoIds.map(async (s) => {
+              const video: any = await (openai as any).videos.retrieve(s.id);
+              return {
+                ...s,
+                status: String(video?.status ?? "unknown"),
+                progress: video?.progress ?? null,
+                error: video?.error ?? null,
+              };
+            }),
+          );
+
+      const incomplete = statuses.filter((s) => s.status !== "completed");
+      if (incomplete.length > 0) {
+        return NextResponse.json(
+          {
+            week_key: weekKey,
+            status: "rendering",
+            segments: statuses,
+          },
+          { status: 202 },
+        );
+      }
+
+      const segmentsDir = path.join(tmpRoot, "segments");
+      await fs.mkdir(segmentsDir, { recursive: true });
+
+      const titleSequencePath = process.env.OPENAI_VIDEO_TITLE_SEQUENCE
+        ? path.isAbsolute(process.env.OPENAI_VIDEO_TITLE_SEQUENCE)
+          ? process.env.OPENAI_VIDEO_TITLE_SEQUENCE
+          : path.join(process.cwd(), process.env.OPENAI_VIDEO_TITLE_SEQUENCE)
+        : path.join(
+            process.cwd(),
+            "lib",
+            "video-modeling",
+            "title-sequence",
+            "juan and xero title sequence.mp4",
+          );
+
+      // Download each segment mp4 once.
+      const clipPaths: string[] = [];
+
+      if (await fileExists(titleSequencePath)) {
+        clipPaths.push(titleSequencePath);
+      }
+
+      for (const s of statuses.sort(
+        (a, b) => a.segment_index - b.segment_index,
+      )) {
+        const cached = await getWeeklyVideoSegmentCachedPathIfFresh({
           weekKey,
           segmentIndex: s.segment_index,
           videoId: String(s.id),
-          download: async () => {
-            const content: any = await (openai as any).videos.downloadContent(
-              s.id,
-            );
-            const ab = await content.arrayBuffer();
-            return Buffer.from(ab);
-          },
-        }));
+        });
+        const segmentPath =
+          cached ??
+          (await ensureWeeklyVideoSegmentCached({
+            weekKey,
+            segmentIndex: s.segment_index,
+            videoId: String(s.id),
+            download: async () => {
+              const content: any = await (openai as any).videos.downloadContent(
+                s.id,
+              );
+              const ab = await content.arrayBuffer();
+              return Buffer.from(ab);
+            },
+          }));
 
-      clipPaths.push(segmentPath);
-    }
-
-    // Normalize all clips to 16:9 1280x720 so concat is reliable.
-    const normalizedDir = path.join(tmpRoot, "normalized");
-    await fs.mkdir(normalizedDir, { recursive: true });
-    const normalizedPaths: string[] = [];
-    for (let i = 0; i < clipPaths.length; i += 1) {
-      const inPath = clipPaths[i]!;
-      const normPath = path.join(
-        normalizedDir,
-        `${String(i).padStart(2, "0")}.mp4`,
-      );
-      normalizedPaths.push(normPath);
-
-      if (!(await fileExists(normPath))) {
-        await normalizeTo16x9(inPath, normPath);
+        clipPaths.push(segmentPath);
       }
-    }
 
-    // Build concat list file.
-    const listPath = path.join(tmpRoot, "concat-list.txt");
-    const list = normalizedPaths
-      .map((p) => `file '${p.replace(/'/g, "'\\''")}'`)
-      .join("\n");
-    await fs.writeFile(listPath, list, "utf8");
+      // Normalize all clips to 16:9 1280x720 so concat is reliable.
+      const normalizedDir = path.join(tmpRoot, "normalized");
+      await fs.mkdir(normalizedDir, { recursive: true });
+      const normalizedPaths: string[] = [];
+      for (let i = 0; i < clipPaths.length; i += 1) {
+        const inPath = clipPaths[i]!;
+        const normPath = path.join(
+          normalizedDir,
+          `${String(i).padStart(2, "0")}.mp4`,
+        );
+        normalizedPaths.push(normPath);
 
-    // Assemble into one mp4. Re-encode for maximum reliability.
-    await runFfmpeg(
-      [
-        "-y",
-        "-f",
-        "concat",
-        "-safe",
-        "0",
-        "-i",
-        listPath,
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        "23",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
-        "-ac",
-        "2",
-        "-ar",
-        "48000",
-        "-movflags",
-        "+faststart",
-        outPath,
-      ],
-      tmpRoot,
-    );
+        if (!(await fileExists(normPath))) {
+          const tmpNorm = path.join(
+            normalizedDir,
+            `${String(i).padStart(2, "0")}.tmp-${process.pid}-${Date.now()}.mp4`,
+          );
+          await normalizeTo16x9(inPath, tmpNorm);
+          await fs.rename(tmpNorm, normPath);
+        }
+      }
 
-    if (metaOnly) {
-      const st = await fs.stat(outPath);
-      return NextResponse.json({
-        week_key: weekKey,
-        status: "completed",
-        url: `/api/video-episode-content?week_key=${encodeURIComponent(weekKey)}`,
-        bytes: st.size,
+      // Build concat list file.
+      const listPath = path.join(tmpRoot, "concat-list.txt");
+      const list = normalizedPaths
+        .map((p) => `file '${p.replace(/'/g, "'\\''")}'`)
+        .join("\n");
+      await fs.writeFile(listPath, list, "utf8");
+
+      // Assemble into one mp4. Re-encode for maximum reliability.
+      const tmpOutPath = path.join(
+        tmpRoot,
+        `episode-with-title.tmp-${process.pid}-${Date.now()}.mp4`,
+      );
+      await runFfmpeg(
+        [
+          "-y",
+          "-f",
+          "concat",
+          "-safe",
+          "0",
+          "-i",
+          listPath,
+          "-c:v",
+          "libx264",
+          "-preset",
+          "veryfast",
+          "-crf",
+          "23",
+          "-pix_fmt",
+          "yuv420p",
+          "-c:a",
+          "aac",
+          "-b:a",
+          "128k",
+          "-ac",
+          "2",
+          "-ar",
+          "48000",
+          "-movflags",
+          "+faststart",
+          tmpOutPath,
+        ],
+        tmpRoot,
+      );
+
+      await fs.rename(tmpOutPath, outPath);
+
+      if (metaOnly) {
+        const st = await fs.stat(outPath);
+        return NextResponse.json({
+          week_key: weekKey,
+          status: "completed",
+          url: `/api/video-episode-content?week_key=${encodeURIComponent(weekKey)}`,
+          bytes: st.size,
+        });
+      }
+
+      const outBuf = await fs.readFile(outPath);
+      return new NextResponse(outBuf, {
+        headers: {
+          "Content-Type": "video/mp4",
+          "Cache-Control": "no-store",
+        },
       });
+    } finally {
+      await releaseAssembleLock(lockPath);
     }
-
-    const outBuf = await fs.readFile(outPath);
-    return new NextResponse(outBuf, {
-      headers: {
-        "Content-Type": "video/mp4",
-        "Cache-Control": "no-store",
-      },
-    });
   } catch (err: any) {
     console.error("[video-episode-content] failed", err);
     const message = err?.message ? String(err.message) : String(err);
