@@ -17,6 +17,20 @@ export const runtime = "nodejs";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+const VIDEO_SIZE_16_9 = "1280x720" as const;
+const additional = `- Continuity constraints: stay in the same living room and keep character designs consistent. Do not teleport characters or change the room layout between cuts.`;
+
+// Toggleable prompt block: encourages shot variety without breaking continuity.
+// Set env OPENAI_VIDEO_CAMERA_VARIETY=false to disable.
+const USE_CAMERA_VARIETY_GUIDANCE =
+  (process.env.OPENAI_VIDEO_CAMERA_VARIETY ?? "true").toLowerCase() !== "false";
+
+console.log(USE_CAMERA_VARIETY_GUIDANCE);
+const CAMERA_VARIETY_GUIDANCE = `Cinematography (direction, NOT spoken):
+- You may change camera angle, shot size, and framing to match the moment.
+- Allowed examples: wide establishing shot, medium two-shot on the couch, close-up reaction, over-the-shoulder, cutaways to hands/tablet/drink can.
+- Allowed movement: subtle push-in, gentle pan/tilt, very light handheld feel (optional).`;
+
 function buildDialogueForPrompt(
   lines: Array<{ speaker: string; text: string }>,
 ): {
@@ -63,6 +77,13 @@ Shot requirements:
 - Natural small motions (blinks, nods, hand gestures, subtle rocking chair motion).
 - No readable text.
 - Avoid logos and copyrighted characters.
+
+${
+  USE_CAMERA_VARIETY_GUIDANCE
+    ? `${CAMERA_VARIETY_GUIDANCE}
+`
+    : ""
+}
 
 Audio/dialogue requirements:
 - Speak the dialogue naturally.
@@ -195,7 +216,8 @@ async function createVideoJobFromPrompt(opts: {
     model,
     prompt: opts.prompt,
     seconds: 12,
-    size: "1280x720",
+    // Explicitly request 16:9 from the generator.
+    size: VIDEO_SIZE_16_9,
   };
 
   if (opts.referencePng) {

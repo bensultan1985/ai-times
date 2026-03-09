@@ -15,7 +15,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 type ScriptLine = { speaker: "Juan" | "Xero" | "Lyle"; text: string };
 
 type SegmentScript = {
-  segment_name: "beginning" | "middle" | "end";
+  segment_name: string;
   setting: string;
   visual_prompt: string;
   dialogue: ScriptLine[];
@@ -26,6 +26,16 @@ type EpisodeScript = {
   logline: string;
   segments: SegmentScript[];
 };
+
+// Episode structure knobs:
+// Change this to generate more/fewer segments per episode.
+const SEGMENT_COUNT = 3;
+const SEGMENT_SECONDS: 4 | 8 | 12 = 12;
+
+function getDesiredSegmentNames(segmentCount: number): string[] {
+  if (segmentCount === 3) return ["beginning", "middle", "end"];
+  return Array.from({ length: segmentCount }, (_, i) => `segment_${i + 1}`);
+}
 
 function getWeekKey(date = new Date()): string {
   // ISO week: week starts Monday.
@@ -65,7 +75,17 @@ async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
   throw new Error("Retry loop exhausted");
 }
 
-async function generateEpisodeScript(): Promise<EpisodeScript> {
+async function generateEpisodeScript(opts: {
+  desiredSegmentNames: string[];
+  segmentSeconds: number;
+}): Promise<EpisodeScript> {
+  const desiredSegmentNames = opts.desiredSegmentNames;
+  const segmentSeconds = opts.segmentSeconds;
+  const structureList = desiredSegmentNames
+    .map((name, i) => `${i + 1}) ${name}`)
+    .join("\n");
+  const totalSeconds = desiredSegmentNames.length * segmentSeconds;
+
   const prompt = `Write a weekly 1-minute sitcom episode script with three characters:
 
 - Juan: an AI robot (breadwinner), thoughtful, slightly earnest.
@@ -75,10 +95,8 @@ async function generateEpisodeScript(): Promise<EpisodeScript> {
 Premise: Juan and Xero pay the bills; Lyle struggles with modern change, but there is warmth underneath.
 Tone: blend broad + dry + sarcastic, with occasional heartwarming beat. Inspiration: Roseanne / Home Improvement vibes (no direct references).
 
-Structure: 3 segments, 12 seconds each (36 seconds total):
-1) beginning
-2) middle
-3) end
+Structure: ${desiredSegmentNames.length} segments, ${segmentSeconds} seconds each (${totalSeconds} seconds total):
+${structureList}
 
 Rules:
 - The episode must be coherent across segments (continuity).
@@ -94,13 +112,19 @@ Return ONLY valid JSON in exactly this shape:
   "logline": string,
   "segments": [
     {
-      "segment_name": "beginning"|"middle"|"end",
+      "segment_name": string,
       "setting": string,
       "visual_prompt": string,
       "dialogue": [ {"speaker":"Juan"|"Xero"|"Lyle", "text": string} ]
     }
   ]
-}`;
+}
+
+Constraints for this request:
+- You MUST return exactly ${desiredSegmentNames.length} segments.
+- Each segment_name MUST be one of: ${desiredSegmentNames.join(", ")}
+- Each segment_name MUST appear exactly once.
+`;
 
   const res = await withRetry(
     () =>
@@ -121,6 +145,25 @@ Return ONLY valid JSON in exactly this shape:
 
   if (!parsed?.segments || !Array.isArray(parsed.segments)) {
     throw new Error("Invalid script JSON: missing segments");
+  }
+
+  const segs = parsed.segments as any[];
+  if (segs.length !== desiredSegmentNames.length) {
+    throw new Error(
+      `Invalid script JSON: expected ${desiredSegmentNames.length} segments, got ${segs.length}`,
+    );
+  }
+
+  const gotNames = segs.map((s) => String(s?.segment_name ?? "").trim());
+  const allowed = new Set(desiredSegmentNames);
+  for (const n of gotNames) {
+    if (!allowed.has(n)) {
+      throw new Error(`Invalid script JSON: unexpected segment_name: ${n}`);
+    }
+  }
+  const unique = new Set(gotNames);
+  if (unique.size !== gotNames.length) {
+    throw new Error("Invalid script JSON: duplicate segment_name values");
   }
 
   return parsed as EpisodeScript;
@@ -155,11 +198,23 @@ async function generateStillImageB64(prompt: string): Promise<Buffer> {
   throw new Error("No image returned");
 }
 
+const VIDEO_SIZE_16_9 = "1280x720" as const;
+
+// Toggleable prompt block: encourages shot variety without breaking continuity.
+// Set env OPENAI_VIDEO_CAMERA_VARIETY=false to disable.
+const USE_CAMERA_VARIETY_GUIDANCE =
+  (process.env.OPENAI_VIDEO_CAMERA_VARIETY ?? "true").toLowerCase() !== "false";
+
+const CAMERA_VARIETY_GUIDANCE = `Cinematography (direction, NOT spoken):
+- You may change camera angle, shot size, and framing to match the moment.
+- Allowed examples: wide establishing shot, medium two-shot on the couch, close-up reaction, over-the-shoulder, cutaways to hands/tablet/drink can.
+- Allowed movement: subtle push-in, gentle pan/tilt, very light handheld feel (optional).
+- Continuity constraints: stay in the same living room and keep character designs consistent. Do not teleport characters or change the room layout between cuts.`;
+
 async function createVideoJob(opts: {
   model: "sora-2" | "sora-2-pro";
   prompt: string;
   seconds: 4 | 8 | 12;
-  size: "720x1280" | "1280x720" | "1024x1792" | "1792x1024";
   inputReferencePath?: string;
   inputReferenceBuffer?: Buffer;
   inputReferenceFileName?: string;
@@ -168,13 +223,13 @@ async function createVideoJob(opts: {
     model,
     prompt,
     seconds,
-    size,
     inputReferencePath,
     inputReferenceBuffer,
     inputReferenceFileName,
   } = opts;
 
-  const createArgs: any = { model, prompt, seconds, size };
+  // Explicitly request 16:9 from the generator.
+  const createArgs: any = { model, prompt, seconds, size: VIDEO_SIZE_16_9 };
   const refName =
     inputReferenceFileName ||
     (inputReferencePath ? path.basename(inputReferencePath) : "reference.png");
@@ -199,7 +254,7 @@ async function createVideoJob(opts: {
     id: String(video.id),
     status: String(video.status ?? "queued"),
     seconds: String(video.seconds ?? seconds),
-    size: String(video.size ?? size),
+    size: String(video.size ?? VIDEO_SIZE_16_9),
   };
 }
 
@@ -459,7 +514,11 @@ export async function POST(req: Request) {
     const tmpRoot = path.join(process.cwd(), ".tmp", "weekly-video", weekKey);
     await fs.mkdir(tmpRoot, { recursive: true });
 
-    const script = await generateEpisodeScript();
+    const desiredSegmentNames = getDesiredSegmentNames(SEGMENT_COUNT);
+    const script = await generateEpisodeScript({
+      desiredSegmentNames,
+      segmentSeconds: SEGMENT_SECONDS,
+    });
 
     const useReference = getBoolEnv("OPENAI_VIDEO_USE_REFERENCE", true);
     const referenceImagePath = useReference
@@ -470,11 +529,7 @@ export async function POST(req: Request) {
       : null;
 
     // Normalize segments
-    const desiredOrder: SegmentScript["segment_name"][] = [
-      "beginning",
-      "middle",
-      "end",
-    ];
+    const desiredOrder = desiredSegmentNames;
 
     const segmentByName = new Map<string, SegmentScript>();
     for (const seg of script.segments) segmentByName.set(seg.segment_name, seg);
@@ -511,6 +566,13 @@ Shot requirements:
 - No readable text.
 - Avoid logos and copyrighted characters.
 
+${
+  USE_CAMERA_VARIETY_GUIDANCE
+    ? `${CAMERA_VARIETY_GUIDANCE}
+`
+    : ""
+}
+
 Audio/dialogue requirements:
 - Speak the dialogue naturally.
 - Do NOT read character names out loud (do not say Juan/Xero/Lyle).
@@ -542,8 +604,7 @@ ${spokenLines}`;
         const job = await createVideoJob({
           model: videoModel,
           prompt: videoPrompt,
-          seconds: 12,
-          size: "1280x720",
+          seconds: SEGMENT_SECONDS,
           inputReferenceBuffer: referenceImageBuffer ?? undefined,
           inputReferenceFileName: "reference-1280x720.png",
         });
@@ -553,7 +614,7 @@ ${spokenLines}`;
           segment_name: seg.segment_name,
           video_url: `/api/video-content/${job.id}`,
           attempt_count: 1,
-          duration_seconds: 12,
+          duration_seconds: SEGMENT_SECONDS,
           video_prompt: videoPrompt,
           last_error: null,
         };
